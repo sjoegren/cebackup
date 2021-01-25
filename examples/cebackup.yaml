@@ -1,0 +1,38 @@
+#
+# cebackup configuration
+# Default config location: ~/.config/cebackup.yaml
+#
+
+# List of files/directories/glob patterns to include in the backup archive.
+# A glob pattern can include ** for recursive globbing, unless 'skip_dirs: yes'.
+backup_sources:
+  #- path: ~/Documents/*.*
+  #  skip_dirs: yes
+  #- path: ~/code
+  #- path: ~/.gnupg/gpg-agent.conf
+
+# Hooks are executables that produce a list of paths on stdout to include in
+# the backup archive.
+# If a directory is specified, all executables in the directory are used.
+pre_hooks:
+  #- <repo-path>/examples/hooks/
+
+local_backup:
+  # Local directory for the encrypted backup archives.
+  directory: ~/.backups
+
+  # The oldest backup archives are deleted, if there are more than
+  # 'keep_archives' and older than 'keep_days'.
+  prune:
+    keep_archives: 5
+    keep_days: 14
+
+  # gpg_key_id identifier of key in keyring to use for encryption.
+  gpg_key_id: key-id/fingerprint/e-mail
+
+  archive_prefix: backup
+  compression: xz
+
+# By default, logs are written to stdout and log level is warning.
+#log_file: ~/.backup.log
+#log_level: info

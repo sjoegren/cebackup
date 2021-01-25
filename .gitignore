@@ -1,3 +1,7 @@
+# Editor files
+.vim/
+_vimrc_local.vim
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
