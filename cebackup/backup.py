@@ -108,10 +108,11 @@ class BackupArchive:
         self.compressed_file = next(self.backup_dir.glob(f"{self.archivename}*"))
 
 
-class Checksums:
+class Metadata:
     CHECKSUM_FILE = "metadata.json"
 
     def __init__(self, backup_dir: pathlib.Path):
+        self._backup_dir = backup_dir
         self._file = backup_dir / self.CHECKSUM_FILE
         self._archives = []
         self._checksums = {}
@@ -134,6 +135,19 @@ class Checksums:
     def get_archive(self, chk) -> Optional[Dict[str, Any]]:
         """Return archive dict or None if chk doesn't exist."""
         return self._checksums.get(chk)
+
+    def recent_backup_exists(self, timestamp: int) -> bool:
+        """Return True if there is a backup created more recently than timestamp."""
+        for arch in self._archives:
+            if (
+                arch["created"] > timestamp
+                and (self._backup_dir / arch["encrypted"]).exists()
+            ):
+                log.debug(
+                    "Backup newer than %s exists: %s", time.ctime(timestamp), arch
+                )
+                return True
+        return False
 
     def get_from_encrypted_name(self, path: pathlib.Path):
         for arch in self._archives:
@@ -183,7 +197,7 @@ def make_backup(
     )
     backup_dir = pathlib.Path(destdir).expanduser().resolve(strict=False)
     backup_dir.mkdir(exist_ok=True)
-    checksums = Checksums(backup_dir)
+    checksums = Metadata(backup_dir)
 
     paths = make_source_list(sources)
     failure = False
@@ -267,7 +281,7 @@ def prune_backups(destdir, keep_backups, keep_days, prefix):
     if not backup_dir.is_dir():
         log.warning("No such directory: %s", backup_dir)
         return None
-    checksums = Checksums(backup_dir)
+    checksums = Metadata(backup_dir)
     backups = [
         f
         for f in backup_dir.iterdir()

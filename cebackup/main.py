@@ -7,6 +7,7 @@ import os.path
 import pathlib
 import shutil
 import sys
+import time
 
 import yaml
 
@@ -40,6 +41,20 @@ def _main():
         "--log-file",
         help="Log to file (append) instead of stdout.",
     )
+    parser.add_argument(
+        "--log-stdout",
+        action="store_true",
+        help="Override log_file from config.",
+    )
+    parser.add_argument(
+        "--skip-if-recent",
+        metavar="days",
+        nargs="?",
+        const=1,
+        type=int,
+        help="Skip if there are a backup in archive directory from the last 'days'."
+        " If no argument given, defaults to %(const)s",
+    )
     parser.add_argument("--prune-backup-dir", action="store_true")
     parser.add_argument(
         "-V",
@@ -60,7 +75,7 @@ def _main():
     tar_ignore_file = local.get("ignore_file", ".cebackup")
 
     logging_kwargs = {}
-    if log_file:
+    if log_file and not args.log_stdout:
         logging_kwargs["filename"] = os.path.expanduser(log_file)
     else:
         logging_kwargs["stream"] = sys.stdout
@@ -82,32 +97,47 @@ def _main():
         )
         return True
 
+    if args.skip_if_recent:
+        md = backup.Metadata(
+            pathlib.Path(local["directory"]).expanduser().resolve(strict=False)
+        )
+        if md.recent_backup_exists(time.time() - abs(args.skip_if_recent) * 86400):
+            return True
+
     start = datetime.datetime.now()
     os.environ["CEBACKUP"] = "1"
-    tmpdir = pathlib.Path.home() / ("cebackup-%s" % start.strftime("%Y%m%dT%H%M%S"))
+    tmpdir = pathlib.Path(local.get("tmpdir", pathlib.Path.home() / "cebackup-tmpdir"))
     tmpdir.mkdir(0o755)
     os.environ["CEBACKUP_TMPDIR"] = str(tmpdir)
 
-    success = backup.make_backup(
-        local["directory"],
-        local["gpg_key_id"],
-        local["prune"]["keep_archives"],
-        local["prune"]["keep_days"],
-        local["archive_prefix"],
-        local.get("compression", "gzip"),
-        config["backup_sources"],
-        config.get("pre_hooks", []),
-        timeout,
-        tar_ignore_file,
-    )
-    logging.log(
-        logging.INFO if success else logging.ERROR,
-        "Backup finished %sin %s",
-        "" if success else "with errors ",
-        str(datetime.datetime.now() - start),
-    )
-    shutil.rmtree(tmpdir.as_posix())
-    return success
+    logging.info("Start backup")
+    try:
+        success = backup.make_backup(
+            local["directory"],
+            local["gpg_key_id"],
+            local["prune"]["keep_archives"],
+            local["prune"]["keep_days"],
+            local["archive_prefix"],
+            local.get("compression", "gzip"),
+            config["backup_sources"],
+            config.get("pre_hooks", []),
+            timeout,
+            tar_ignore_file,
+        )
+    except Exception:
+        logging.debug("", exc_info=True)
+        raise
+    else:
+        logging.log(
+            logging.INFO if success else logging.ERROR,
+            "Backup finished %sin %s",
+            "" if success else "with errors ",
+            str(datetime.datetime.now() - start),
+        )
+        return success
+    finally:
+        logging.debug("removing %s", tmpdir)
+        shutil.rmtree(tmpdir.as_posix())
 
 
 def main():
