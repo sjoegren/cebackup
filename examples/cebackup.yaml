@@ -31,7 +31,15 @@ local_backup:
   gpg_key_id: key-id/fingerprint/e-mail
 
   archive_prefix: backup
-  compression: xz
+
+  # The command including any arguments used to compress the tar archive.
+  #compression: gzip
+
+  # Passed to tar '--exclude-ignore-recursive=' option
+  ignore_file: .cebackup
+
+  # timeout for creating tar archive.
+  #timeout: 120
 
 # By default, logs are written to stdout and log level is warning.
 #log_file: ~/.backup.log

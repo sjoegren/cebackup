@@ -5,6 +5,7 @@ import json
 import pathlib
 import os
 import os.path
+import shlex
 import subprocess
 import time
 from collections import abc
@@ -13,52 +14,98 @@ from typing import List, Dict, Iterable, Optional, Any
 
 from . import BackupException
 
-_COMPRESSION_MAP = {
-    "xz": ("xz", "--xz"),
-    "bzip2": ("bz2", "--bzip2"),
-    "gzip": ("gz", "--gzip"),
-}
-
 
 class BackupArchive:
-    def __init__(self, backup_dir: pathlib.Path, prefix: str, compression: str):
+    def __init__(
+        self, backup_dir: pathlib.Path, prefix: str, compression: str, timeout: int = 60
+    ):
         self.backup_dir = backup_dir
         self.prefix = prefix
+        self.timeout = timeout
         self.time = int(time.time())
-        try:
-            self.file_ext = _COMPRESSION_MAP[compression][0]
-            self.tar_flags = [_COMPRESSION_MAP[compression][1]]
-        except KeyError:
-            raise BackupException("Invalid compression type: %s", compression)
-        self.archivename = "{}_{}_{}.tar.{}".format(
+        self.compress_args = shlex.split(compression)
+        self.archivename = "{}_{}_{}.tar".format(
             prefix,
             self.time,
             time.strftime("%Y%m%dT%H%M%S", time.localtime(self.time)),
-            self.file_ext,
         )
-        self.path_encrypted = self.backup_dir / f"{self.archivename}.gpg"
+        self.compressed_file = None
+        self.tar_flags = [
+            "--exclude-vcs",
+            "--exclude-vcs-ignores",
+            "--verbose",
+            "--file",
+            str(self),
+        ]
+        self._added_paths = set()
+        self.failed = set()
 
     def __str__(self):
         return str(self.backup_dir / self.archivename)
 
-    def unlink(self):
-        os.unlink(str(self))
+    @property
+    def path_encrypted(self):
+        return self.backup_dir / (self.compressed_file.name + ".gpg")
 
-    def exists(self):
-        return (self.backup_dir / self.archivename).exists()
+    def unlink(self):
+        self.compressed_file.unlink()
 
     def make_checksum(self):
-        assert self.exists()
+        assert self.compressed_file.exists()
         checksum = hashlib.sha256()
         bufsize = 32 * 1024 ** 2
-        with (self.backup_dir / self.archivename).open("rb") as tarfile:
+        with self.compressed_file.open("rb") as tarfile:
             data = tarfile.read(bufsize)
             while data:
                 checksum.update(data)
                 data = tarfile.read(bufsize)
-            assert data == b""
         log.info("Archive sha256 checksum: %s", checksum.hexdigest())
         return checksum.hexdigest()
+
+    def add(self, path: str):
+        cmdargs = ["tar", "--append" if self._added_paths else "--create"]
+        cmdargs += self.tar_flags
+        cmdargs.append(path)
+        log.debug("Run %s", " ".join(cmdargs))
+        try:
+            p = subprocess.run(
+                cmdargs, capture_output=True, text=True, timeout=self.timeout
+            )
+        except subprocess.TimeoutExpired as exc:
+            log.critical(
+                "Timed out while creating backup archive, cmd: %s, stderr: %s",
+                exc.cmd,
+                exc.stderr,
+            )
+            self.failed.add(path)
+            return
+        if p.returncode != 0:
+            log.debug("stdout: %s", p.stdout)
+            self.failed.add(path)
+            log.error("cmd %s, stderr: %s", p.args, p.stderr)
+        else:
+            self._added_paths.add(path)
+
+    def compress(self, timeout):
+        cmd = self.compress_args + [str(self)]
+        log.info("Compressing archive: %s", shlex.join(cmd))
+        try:
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=timeout,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            log.exception(
+                "Failed to compress archive, cmd: %s, stdout: %s, stderr: %s",
+                exc.cmd,
+                exc.stdout,
+                exc.stderr,
+            )
+            raise BackupException("failed to compress archive")
+        self.compressed_file = next(self.backup_dir.glob(f"{self.archivename}*"))
 
 
 class Checksums:
@@ -75,7 +122,7 @@ class Checksums:
             self._set_checksums()
 
     def _set_checksums(self):
-        self._checksums = {x["sha256"]: x for x in self._archives}
+        self._checksums = {x["open-checksum"]: x for x in self._archives}
 
     def write(self):
         with self._file.open("w") as file_:
@@ -101,12 +148,12 @@ class Checksums:
             arch["touched"] = time.time()
             log.debug("Update touched timestamp for %s", arch)
             return
-        log.debug("Store new archive: %s", archive)
+        log.debug("Store new archive: %s", archive.compressed_file)
         self._archives.append(
             {
-                "archive": archive.archivename,
+                "archive": archive.compressed_file.name,
                 "encrypted": archive.path_encrypted.name,
-                "sha256": chk,
+                "open-checksum": chk,
                 "created": archive.time,
                 "touched": archive.time,
             }
@@ -123,6 +170,8 @@ def make_backup(
     compression: str,
     sources: List[dict],
     hooks: List[str],
+    timeout: int,
+    tar_ignore_file: str,
 ):
     log.debug(
         "destdir: %s, gpg_key_id: %s, keep_backups: %d",
@@ -134,17 +183,25 @@ def make_backup(
     backup_dir.mkdir(exist_ok=True)
     checksums = Checksums(backup_dir)
 
+    paths = make_source_list(sources)
+    if hooks:
+        extra_paths = call_hooks(hooks)
+        log.debug("Got %d paths from hooks", len(extra_paths))
+        paths += extra_paths
+    log.debug("Paths to include in archive:\n%s", "\n  ".join(sorted(paths)))
+
     archive = BackupArchive(backup_dir, prefix, compression)
     log.info("Create archive %s", archive.archivename)
-    cmdargs = ["tar", *archive.tar_flags, "-cvf", str(archive)]
-    cmdargs += make_source_list(sources)
-    cmdargs += call_hooks(hooks)
-    log.debug("Run %s", cmdargs)
-    p = subprocess.run(cmdargs, capture_output=True, text=True)
-    if p.returncode != 0:
-        log.debug("stdout: %s", p.stdout)
-    log.log(log.ERROR if p.returncode else log.DEBUG, "stderr: %s", p.stderr)
-    p.check_returncode()
+    archive.tar_flags.append("--exclude-ignore-recursive=" + tar_ignore_file)
+    timeout_ = time.monotonic() + timeout
+    for path in paths:
+        log.debug("Add %s to %s", path, archive.archivename)
+        if time.monotonic() >= timeout_:
+            log.error("Timeout (%d sec) reached", timeout)
+            archive.failed.add(path)
+            break
+        archive.add(path)
+    archive.compress(timeout)
 
     checksum = archive.make_checksum()
     if (existing := checksums.get_archive(checksum)) :
@@ -157,7 +214,7 @@ def make_backup(
             archive.unlink()
             checksums.add(checksum, archive)
             checksums.write()
-            return
+            return True
         else:
             log.warning(
                 "Expected %s to exist, but it doesn't. Remove from checksum file.",
@@ -168,7 +225,7 @@ def make_backup(
     checksums.add(checksum, archive)
     checksums.write()
 
-    log.info("Encrypt archive %s", archive.archivename)
+    log.info("Encrypt archive %s", archive.compressed_file)
     cmdargs = [
         "gpg",
         "--encrypt",
@@ -177,7 +234,7 @@ def make_backup(
         "--verbose",
         "--output",
         archive.path_encrypted.as_posix(),
-        str(archive),
+        archive.compressed_file.as_posix(),
     ]
     log.debug("Run %s", cmdargs)
     p = subprocess.run(cmdargs, capture_output=True, text=True)
@@ -187,7 +244,12 @@ def make_backup(
 
     archive.unlink()
 
+    if archive.failed:
+        log.error("Failed to archive some paths: %s", archive.failed)
+        return False
+
     prune_backups(destdir, keep_backups, keep_days, prefix)
+    return True
 
 
 def prune_backups(destdir, keep_backups, keep_days, prefix):
@@ -214,7 +276,7 @@ def prune_backups(destdir, keep_backups, keep_days, prefix):
         if meta["touched"] < age_limit:
             log.info("Removing %s, timestamp: %s", bk.name, time.ctime(meta["touched"]))
             bk.unlink()
-            checksums.remove(meta["sha256"])
+            checksums.remove(meta["open-checksum"])
         else:
             log.debug(
                 "not deleting %s, last touched %s", bk.name, time.ctime(meta["touched"])
@@ -223,7 +285,6 @@ def prune_backups(destdir, keep_backups, keep_days, prefix):
 
 
 def make_source_list(sources: Iterable[dict]) -> List[str]:
-    """Relative paths in sources are relative to basedir."""
     ret = []
     for src in sources:
         try:
@@ -247,7 +308,7 @@ def call_hooks(hooks: Iterable[str]) -> List[str]:
     for hook in resolve_hooks(hooks):
         log.info("Run hook %s", hook)
         if (ret := run_hook(hook)) is not None:
-            log.debug("%s", ret)
+            log.debug("got paths: %s", ret)
             paths |= set(ret)
         else:
             log.error("Failed to run hook %s", hook)
@@ -288,4 +349,5 @@ def run_hook(hook: pathlib.Path, timeout=60) -> Optional[list[str]]:
     except subprocess.TimeoutExpired as exc:
         log.error("%s timed out, stderr: %s", exc.cmd, exc.stderr)
         return None
+    log.debug("stdout %s, stderr: %s", p.stdout, p.stderr)
     return p.stdout.strip().splitlines()

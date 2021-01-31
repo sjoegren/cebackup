@@ -27,3 +27,6 @@ testpaths = [
     "tests",
 ]
 log_level = "DEBUG"
+markers = [
+    "subprocess: test runs external tools in subprocesses (deselect with '-m \"not subprocess\"')",
+]

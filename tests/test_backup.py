@@ -4,7 +4,6 @@ import pathlib
 import pytest
 
 from cebackup import backup as bk
-from cebackup import BackupException
 
 CONFIG_SOURCES = [
     {"path": "~/Documents/"},
@@ -36,37 +35,28 @@ def test_make_source_list(homedir):
     }
 
 
-@pytest.mark.parametrize(
-    "prefix, compression, ext",
-    [
-        ("ham", "gzip", "gz"),
-        ("spam", "bzip2", "bz2"),
-        ("eggs", "xz", "xz"),
-    ],
-)
-def test_backuparchive(tmp_path, faketime, prefix, compression, ext):
-    a = bk.BackupArchive(tmp_path, prefix, compression)
-    assert a.exists() is False
-    assert str(a) == "%s/%s_%s_20210101T000000.tar.%s" % (
-        tmp_path,
-        prefix,
-        faketime,
-        ext,
-    )
-
-
-def test_backuparchive_invalid_compression(tmp_path):
-    with pytest.raises(BackupException, match=r"^Invalid compression type: zippo"):
-        bk.BackupArchive(tmp_path, "test", "zippo")
+@pytest.mark.subprocess
+def test_backuparchive_make_archive(tmp_path: pathlib.Path, faketime):
+    archive = bk.BackupArchive(tmp_path, "foo", "gzip")
+    assert str(archive) == "%s/%s_%s_20210101T000000.tar" % (tmp_path, "foo", faketime)
+    for f in {"alpha.txt", "bravo.txt"}:
+        (tmp_path / f).write_text("back this up")
+        archive.add((tmp_path / f).as_posix())
+    archive.compress(timeout=5)
+    assert archive.compressed_file.exists()
+    assert len(archive.make_checksum()) == 64
+    archive.unlink()
+    assert not archive.compressed_file.exists()
 
 
 def test_checksums_empty_file(tmp_path, faketime):
     chk = bk.Checksums(tmp_path)
     assert len(chk._archives) == 0
-    archive = bk.BackupArchive(tmp_path, "test", "bzip2")
+    archive = bk.BackupArchive(tmp_path, "test", "bzip2", 60)
+    archive.compressed_file = tmp_path / (archive.archivename + ".bz2")
     chk.add("deadbeef", archive)
     assert len(chk._archives) == 1
-    chk.add("deadbeef", bk.BackupArchive(tmp_path, "test", "bzip2"))
+    chk.add("deadbeef", bk.BackupArchive(tmp_path, "test", "bzip2", 60))
     assert len(chk._archives) == 1
     chk.write()
     with open(tmp_path / bk.Checksums.CHECKSUM_FILE) as fp:
@@ -75,7 +65,7 @@ def test_checksums_empty_file(tmp_path, faketime):
         {
             "archive": f"test_{faketime}_20210101T000000.tar.bz2",
             "encrypted": f"test_{faketime}_20210101T000000.tar.bz2.gpg",
-            "sha256": "deadbeef",
+            "open-checksum": "deadbeef",
             "created": faketime,
             "touched": faketime,
         }
@@ -87,7 +77,7 @@ def test_checksums_load_file(tmp_path):
         {
             "archive": "test_12345_20210101T000000.tar.xz",
             "encrypted": "test_12345_20210101T000000.tar.xz.gpg",
-            "sha256": "c0ffee",
+            "open-checksum": "c0ffee",
             "created": 12345,
             "touched": 45678,
         }
