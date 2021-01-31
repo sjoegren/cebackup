@@ -186,10 +186,13 @@ def make_backup(
     checksums = Checksums(backup_dir)
 
     paths = make_source_list(sources)
+    failure = False
     if hooks:
-        extra_paths = call_hooks(hooks)
+        success, extra_paths = call_hooks(hooks)
         log.debug("Got %d paths from hooks", len(extra_paths))
         paths += extra_paths
+        if not success:
+            failure = True
     paths.sort()
     log.debug("Paths to include in archive:\n%s", "\n  ".join(paths))
 
@@ -217,7 +220,7 @@ def make_backup(
             archive.unlink()
             checksums.add(checksum, archive)
             checksums.write()
-            return True
+            return not failure
         else:
             log.warning(
                 "Expected %s to exist, but it doesn't. Remove from checksum file.",
@@ -252,7 +255,7 @@ def make_backup(
         return False
 
     prune_backups(destdir, keep_backups, keep_days, prefix)
-    return True
+    return not failure
 
 
 def prune_backups(destdir, keep_backups, keep_days, prefix):
@@ -304,10 +307,11 @@ def make_source_list(sources: Iterable[dict]) -> List[str]:
     return ret
 
 
-def call_hooks(hooks: Iterable[str]) -> List[str]:
+def call_hooks(hooks: Iterable[str]) -> tuple[bool, list[str]]:
     """Call all executables in hooks and return a list of unique paths to
     include in the backup."""
     paths = set()
+    all_ok = True
     for hook in resolve_hooks(hooks):
         log.info("Run hook %s", hook)
         if (ret := run_hook(hook)) is not None:
@@ -315,7 +319,8 @@ def call_hooks(hooks: Iterable[str]) -> List[str]:
             paths |= set(ret)
         else:
             log.error("Failed to run hook %s", hook)
-    return list(paths)
+            all_ok = False
+    return all_ok, list(paths)
 
 
 def resolve_hooks(hooks_list: Iterable[str]) -> abc.Generator[pathlib.Path, None, None]:

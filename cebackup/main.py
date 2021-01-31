@@ -2,8 +2,10 @@ import argparse
 import datetime
 import importlib.metadata
 import logging
+import os
 import os.path
 import pathlib
+import shutil
 import sys
 
 import yaml
@@ -81,6 +83,11 @@ def _main():
         return True
 
     start = datetime.datetime.now()
+    os.environ["CEBACKUP"] = "1"
+    tmpdir = pathlib.Path.home() / ("cebackup-%s" % start.strftime("%Y%m%dT%H%M%S"))
+    tmpdir.mkdir(0o755)
+    os.environ["CEBACKUP_TMPDIR"] = str(tmpdir)
+
     success = backup.make_backup(
         local["directory"],
         local["gpg_key_id"],
@@ -99,7 +106,7 @@ def _main():
         "" if success else "with errors ",
         str(datetime.datetime.now() - start),
     )
-
+    shutil.rmtree(tmpdir.as_posix())
     return success
 
 
