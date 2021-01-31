@@ -125,6 +125,8 @@ class Checksums:
         self._checksums = {x["open-checksum"]: x for x in self._archives}
 
     def write(self):
+        self._archives.sort(key=lambda arch: arch["touched"])
+        self._set_checksums()
         with self._file.open("w") as file_:
             json.dump(self._archives, file_, indent=4)
         log.info("Wrote %d checksums to %s", len(self._archives), self._file)
@@ -188,7 +190,8 @@ def make_backup(
         extra_paths = call_hooks(hooks)
         log.debug("Got %d paths from hooks", len(extra_paths))
         paths += extra_paths
-    log.debug("Paths to include in archive:\n%s", "\n  ".join(sorted(paths)))
+    paths.sort()
+    log.debug("Paths to include in archive:\n%s", "\n  ".join(paths))
 
     archive = BackupArchive(backup_dir, prefix, compression)
     log.info("Create archive %s", archive.archivename)
