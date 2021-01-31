@@ -1,5 +1,7 @@
 # Configurable encrypted backup tool
 
+![tests status](https://github.com/akselsjogren/cebackup/workflows/tests/badge.svg)
+
 Requirements:
 
 * Python 3.9+
