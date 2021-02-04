@@ -101,7 +101,12 @@ def _main():
         md = backup.Metadata(
             pathlib.Path(local["directory"]).expanduser().resolve(strict=False)
         )
-        if md.recent_backup_exists(time.time() - abs(args.skip_if_recent) * 86400):
+        # Add a few hours to the "recent" limit, so that periodic runs exactly
+        # 24h after previous run arent't skipped, which would cause the period
+        # runs to drift.
+        if md.recent_backup_exists(
+            time.time() - abs(args.skip_if_recent) * 86400 + 3600 * 8
+        ):
             return True
 
     start = datetime.datetime.now()
