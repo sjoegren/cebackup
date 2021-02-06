@@ -11,11 +11,27 @@ backup_sources:
   #- path: ~/code
   #- path: ~/.gnupg/gpg-agent.conf
 
-# Hooks are executables that produce a list of paths on stdout to include in
-# the backup archive.
+# pre_hooks are executables that produce a list of paths on stdout to include
+# in the backup archive.
 # If a directory is specified, all executables in the directory are used.
-pre_hooks:
-  #- <repo-path>/examples/hooks/
+# Variables in hooks running environment:
+#   CEBACKUP=1
+#   CEBACKUP_TMPDIR, directory where the hook can put files, possibly to back
+#   up.
+#pre_hooks:
+#  - <repo-path>/examples/hooks/
+
+# post_hooks are executed after a cebackup execution.
+# Variables in hooks running environment:
+#   CEBACKUP=1
+#   CEBACKUP_OK: 1/0
+#   CEBACKUP_BACKUP_CREATED: 1/0
+#   CEBACKUP_BACKUP_PATH: Path to created backup, or existing with the same
+#     checksum, or empty.
+#   CEBACKUP_SOURCES: Path to a file with a list of paths that were included in
+#     the backup.
+#post_hooks:
+#  - /path/to/script
 
 local_backup:
   # Local directory for the encrypted backup archives.

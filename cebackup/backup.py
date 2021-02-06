@@ -1,18 +1,21 @@
-import logging as log
 import glob
 import hashlib
 import json
-import pathlib
+import logging as log
 import os
 import os.path
+import pathlib
 import shlex
 import subprocess
 import time
-from collections import abc
+from collections import namedtuple
 
 from typing import List, Dict, Iterable, Optional, Any
 
 from . import BackupException
+from . import hooks
+
+Result = namedtuple("Result", "ok, created, meta, paths", defaults=(False, {}, []))
 
 
 class BackupArchive:
@@ -185,7 +188,7 @@ def make_backup(
     prefix: str,
     compression: str,
     sources: List[dict],
-    hooks: List[str],
+    pre_hooks: List[str],
     timeout: int,
     tar_ignore_file: str,
 ):
@@ -201,8 +204,8 @@ def make_backup(
 
     paths = make_source_list(sources)
     failure = False
-    if hooks:
-        success, extra_paths = call_hooks(hooks)
+    if pre_hooks:
+        success, extra_paths = hooks.call_hooks(pre_hooks)
         log.debug("Got %d paths from hooks", len(extra_paths))
         paths += extra_paths
         if not success:
@@ -214,6 +217,8 @@ def make_backup(
     log.info("Create archive %s", archive.archivename)
     archive.tar_flags.append("--exclude-ignore-recursive=" + tar_ignore_file)
     timeout_ = time.monotonic() + timeout
+    # Append paths to tar archive one by one so that timeout can be checked
+    # between paths.
     for path in paths:
         log.debug("Add %s to %s", path, archive.archivename)
         if time.monotonic() >= timeout_:
@@ -234,7 +239,7 @@ def make_backup(
             archive.unlink()
             checksums.add(checksum, archive)
             checksums.write()
-            return not failure
+            return Result(not failure)
         else:
             log.warning(
                 "Expected %s to exist, but it doesn't. Remove from checksum file.",
@@ -266,10 +271,10 @@ def make_backup(
 
     if archive.failed:
         log.error("Failed to archive some paths: %s", archive.failed)
-        return False
+        return Result(False, True, checksums.get_archive(checksum), paths)
 
     prune_backups(destdir, keep_backups, keep_days, prefix)
-    return not failure
+    return Result(not failure, True, checksums.get_archive(checksum), paths)
 
 
 def prune_backups(destdir, keep_backups, keep_days, prefix):
@@ -319,57 +324,3 @@ def make_source_list(sources: Iterable[dict]) -> List[str]:
             log.debug("Add: %s", p)
             ret.append(os.path.normpath(p))
     return ret
-
-
-def call_hooks(hooks: Iterable[str]) -> tuple[bool, list[str]]:
-    """Call all executables in hooks and return a list of unique paths to
-    include in the backup."""
-    paths = set()
-    all_ok = True
-    for hook in resolve_hooks(hooks):
-        log.info("Run hook %s", hook)
-        if (ret := run_hook(hook)) is not None:
-            log.debug("got paths: %s", ret)
-            paths |= set(ret)
-        else:
-            log.error("Failed to run hook %s", hook)
-            all_ok = False
-    return all_ok, list(paths)
-
-
-def resolve_hooks(hooks_list: Iterable[str]) -> abc.Generator[pathlib.Path, None, None]:
-    for hook in hooks_list:
-        path = pathlib.Path(hook).expanduser().resolve(strict=False)
-        if path.is_file() and os.access(path, os.R_OK | os.X_OK):
-            yield path
-        elif path.is_dir():
-            for f in path.iterdir():
-                if f.is_file() and os.access(f, os.R_OK | os.X_OK):
-                    yield f
-        else:
-            log.warning("No usable hooks: %s", hook)
-
-
-def run_hook(hook: pathlib.Path, timeout=60) -> Optional[list[str]]:
-    try:
-        p = subprocess.run(
-            [hook.as_posix()],
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        log.error(
-            "Failed to run hook %s, exit code: %d, stderr: %s",
-            hook,
-            exc.returncode,
-            exc.stderr,
-        )
-        log.debug("%s stdout: %s", hook, exc.stdout, exc_info=True)
-        return None
-    except subprocess.TimeoutExpired as exc:
-        log.error("%s timed out, stderr: %s", exc.cmd, exc.stderr)
-        return None
-    log.debug("stdout %s, stderr: %s", p.stdout, p.stderr)
-    return p.stdout.strip().splitlines()

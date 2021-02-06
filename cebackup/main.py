@@ -13,6 +13,7 @@ import yaml
 
 from . import BackupException, DEFAULT_CONFIG_FILE
 from . import backup
+from . import hooks
 
 
 def _main():
@@ -111,13 +112,22 @@ def _main():
 
     start = datetime.datetime.now()
     os.environ["CEBACKUP"] = "1"
-    tmpdir = pathlib.Path(local.get("tmpdir", pathlib.Path.home() / "cebackup-tmpdir"))
+    tmpdir = pathlib.Path(
+        pathlib.Path.home() / "cebackup-tmpdir-{:%Y%m%d%H%M%S}".format(start),
+    )
     tmpdir.mkdir(0o755)
     os.environ["CEBACKUP_TMPDIR"] = str(tmpdir)
 
+    post_hooks_env = {
+        "CEBACKUP_OK": "0",
+        "CEBACKUP_BACKUP_CREATED": "0",
+        "CEBACKUP_BACKUP_PATH": "",
+        "CEBACKUP_SOURCES": "",
+        "CEBACKUP_LOGFILE": logging_kwargs.get("filename", ""),
+    }
     logging.info("Start backup")
     try:
-        success = backup.make_backup(
+        result = backup.make_backup(
             local["directory"],
             local["gpg_key_id"],
             local["prune"]["keep_archives"],
@@ -134,13 +144,27 @@ def _main():
         raise
     else:
         logging.log(
-            logging.INFO if success else logging.ERROR,
+            logging.INFO if result.ok else logging.ERROR,
             "Backup finished %sin %s",
-            "" if success else "with errors ",
+            "" if result.ok else "with errors ",
             str(datetime.datetime.now() - start),
         )
-        return success
+        post_hooks_env["CEBACKUP_OK"] = str(int(result.ok))
+        post_hooks_env["CEBACKUP_BACKUP_CREATED"] = str(int(result.created))
+        if result.meta:
+            post_hooks_env["CEBACKUP_BACKUP_PATH"] = os.path.join(
+                local["directory"], result.meta["encrypted"]
+            )
+        if result.paths:
+            src_file = tmpdir / "backup_sources"
+            with src_file.open("w") as fp:
+                for path in result.paths:
+                    print(path, file=fp)
+            post_hooks_env["CEBACKUP_SOURCES"] = str(src_file)
+        return result.ok
     finally:
+        os.environ.update(post_hooks_env)
+        hooks.call_hooks(config.get("post_hooks", []))
         logging.debug("removing %s", tmpdir)
         shutil.rmtree(tmpdir.as_posix())
 
