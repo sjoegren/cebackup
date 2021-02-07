@@ -94,3 +94,18 @@ def test_checksums_load_file(tmp_path):
     )
     chk.remove("c0ffee")
     assert chk.get_archive("c0ffee") is None
+
+
+@pytest.mark.parametrize(
+    "filename, month",
+    [
+        ("foo-bar-baz_1545606000_20181224T000000.tar", "2018-12"),
+        ("foo-bar-baz_1545606000_19000000T000000.tar.gz", "2018-12"),
+        ("_1610665200_20210115T000000.tar.bz2.gpg", "2021-1"),
+        ("_1612688337_20210207T000000.tar.gz.gpg", "2021-2"),
+    ],
+)
+def test_get_month_from_backup(filename, month):
+    path = pathlib.Path("/backup-dir") / filename
+    assert bk.get_month_from_backup_file(path) == month
+    assert bk.get_month_from_backup_file(str(path)) == month

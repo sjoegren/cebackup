@@ -5,12 +5,13 @@ import logging as log
 import os
 import os.path
 import pathlib
+import re
 import shlex
 import subprocess
 import time
 from collections import namedtuple
 
-from typing import List, Dict, Iterable, Optional, Any
+from typing import List, Dict, Iterable, Optional, Any, Union
 
 from . import BackupException
 from . import hooks
@@ -156,7 +157,7 @@ class Metadata:
         for arch in self._archives:
             if arch["encrypted"] == path.name:
                 return arch
-        raise BackupException("No metadata found for %s", path)
+        return None
 
     def remove(self, chk):
         arch = self._checksums.pop(chk)
@@ -287,6 +288,7 @@ def prune_backups(destdir, keep_backups, keep_days, prefix):
         log.warning("No such directory: %s", backup_dir)
         return None
     checksums = Metadata(backup_dir)
+    keep_monthly = {}
     backups = [
         f
         for f in backup_dir.iterdir()
@@ -295,10 +297,18 @@ def prune_backups(destdir, keep_backups, keep_days, prefix):
     backups.sort(key=lambda f: f.name, reverse=True)
     age_limit = time.time() - keep_days * 86400
     log.info("Delete backup archives older than %s", time.ctime(age_limit))
+
+    # Iterate over backup archive files, from latest and descending.
     for bk in backups[keep_backups:]:
         log.debug("consider for deletion: %s", bk.name)
+        month = get_month_from_backup_file(bk)
         meta = checksums.get_from_encrypted_name(bk)
-        if meta["touched"] < age_limit:
+        if month not in keep_monthly:
+            log.debug("Keep latest backup from month %s: %s", month, bk)
+            keep_monthly[month] = bk
+        elif meta is None:
+            log.warning("No metadata found for %s", bk)
+        elif meta["touched"] < age_limit:
             log.info("Removing %s, timestamp: %s", bk.name, time.ctime(meta["touched"]))
             bk.unlink()
             checksums.remove(meta["open-checksum"])
@@ -324,3 +334,11 @@ def make_source_list(sources: Iterable[dict]) -> List[str]:
             log.debug("Add: %s", p)
             ret.append(os.path.normpath(p))
     return ret
+
+
+def get_month_from_backup_file(path: Union[pathlib.Path, str]):
+    filename = pathlib.Path(path).name
+    if (m := re.match(r"[\w-]*?_(\d{10})_\w+\.tar[a-z0-9\.]*$", filename)) :
+        t = time.gmtime(int(m[1]))
+        return "{}-{}".format(t.tm_year, t.tm_mon)
+    raise BackupException("Invalid archive name: %s", path)
