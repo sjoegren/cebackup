@@ -25,13 +25,15 @@ from collections import abc
 from typing import Iterable, Optional
 
 
-def call_hooks(hooks: Iterable[str]) -> tuple[bool, list[str]]:
+def call_hooks(hooks: Optional[Iterable[str]]) -> tuple[bool, list[str]]:
     """Call all executables in hooks and return a list of lines written to
     stdout.
 
     pre_hooks uses the stdout API to print paths that should be included in the
     backup.
     """
+    if not hooks:
+        return True, []
     paths = set()
     all_ok = True
     for hook in resolve_hooks(hooks):
