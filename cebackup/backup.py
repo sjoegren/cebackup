@@ -183,9 +183,8 @@ class Metadata:
 
 def make_backup(
     destdir: str,
-    gpg_key_id: str,
-    keep_backups: int,
-    keep_days: int,
+    gpg_public_key: tuple[str, bool],
+    prune_backups: dict[str, int],
     prefix: str,
     compression: str,
     sources: List[dict],
@@ -194,10 +193,10 @@ def make_backup(
     tar_ignore_file: str,
 ):
     log.debug(
-        "destdir: %s, gpg_key_id: %s, keep_backups: %d",
+        "destdir: %s, gpg_public_key: %s, prune_backups: %s",
         destdir,
-        gpg_key_id,
-        keep_backups,
+        gpg_public_key,
+        prune_backups,
     )
     backup_dir = pathlib.Path(destdir).expanduser().resolve(strict=False)
     backup_dir.mkdir(exist_ok=True)
@@ -252,11 +251,12 @@ def make_backup(
     checksums.write()
 
     log.info("Encrypt archive %s", archive.compressed_file)
+    pubkey_spec, pubkey_is_file = gpg_public_key
     cmdargs = [
         "gpg",
         "--encrypt",
-        "--recipient",
-        gpg_key_id,
+        "--recipient-file" if pubkey_is_file else "--recipient",
+        pubkey_spec,
         "--verbose",
         "--output",
         archive.path_encrypted.as_posix(),
@@ -274,16 +274,17 @@ def make_backup(
         log.error("Failed to archive some paths: %s", archive.failed)
         return Result(False, True, checksums.get_archive(checksum), paths)
 
-    prune_backups(destdir, keep_backups, keep_days, prefix)
+    if prune_backups:
+        cleanup_backups(destdir, prune_backups, prefix)
     return Result(not failure, True, checksums.get_archive(checksum), paths)
 
 
-def prune_backups(destdir, keep_backups, keep_days, prefix):
-    """Delete backup files from disk and metadata, except the `keep_backups` newest.
+def cleanup_backups(destdir, prune_backups, prefix):
+    """Delete backup files from disk and metadata, except the `keep_archives` newest.
 
     A backup file must also be older than `keep_days` to be deleted.
     """
-    backup_dir = pathlib.Path(destdir).expanduser().resolve(strict=False)
+    backup_dir = pathlib.Path(destdir)
     if not backup_dir.is_dir():
         log.warning("No such directory: %s", backup_dir)
         return None
@@ -295,11 +296,11 @@ def prune_backups(destdir, keep_backups, keep_days, prefix):
         if f.is_file() and f.name.startswith(prefix) and f.name.endswith(".gpg")
     ]
     backups.sort(key=lambda f: f.name, reverse=True)
-    age_limit = time.time() - keep_days * 86400
+    age_limit = time.time() - prune_backups["keep_days"] * 86400
     log.info("Delete backup archives older than %s", time.ctime(age_limit))
 
     # Iterate over backup archive files, from latest and descending.
-    for bk in backups[keep_backups:]:
+    for bk in backups[prune_backups["keep_archives"] :]:
         log.debug("consider for deletion: %s", bk.name)
         month = get_month_from_backup_file(bk)
         meta = checksums.get_from_encrypted_name(bk)
@@ -336,7 +337,7 @@ def make_source_list(sources: Iterable[dict]) -> List[str]:
     return ret
 
 
-def get_month_from_backup_file(path: Union[pathlib.Path, str]):
+def get_month_from_backup_file(path: Union[pathlib.Path, str]) -> str:
     filename = pathlib.Path(path).name
     if (m := re.match(r"[\w-]*?_(\d{10})_\w+\.tar[a-z0-9\.]*$", filename)) :
         t = time.gmtime(int(m[1]))

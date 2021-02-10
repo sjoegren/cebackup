@@ -53,7 +53,7 @@ def _main():
         nargs="?",
         const=1,
         type=int,
-        help="Skip if there are a backup in archive directory from the last 'days'."
+        help="Skip if there is a backup in archive directory from the last 'days'."
         " If no argument given, defaults to %(const)s",
     )
     parser.add_argument("--prune-backup-dir", action="store_true")
@@ -66,14 +66,12 @@ def _main():
     args = parser.parse_args()
 
     config_file = pathlib.Path(args.config).expanduser().resolve(strict=True)
-    config: dict = yaml.safe_load(config_file.read_bytes())
-    config["backup_sources"].append({"path": str(config_file)})
+    config = get_config(config_file)
     local = config["local_backup"]
 
     log_file = args.log_file or config.get("log_file")
     log_level = args.log_level or config.get("log_level", "warning").upper()
     timeout = args.timeout or local.get("timeout", 120)
-    tar_ignore_file = local.get("ignore_file", ".cebackup")
 
     logging_kwargs = {}
     if log_file and not args.log_stdout:
@@ -90,18 +88,18 @@ def _main():
     )
 
     if args.prune_backup_dir:
-        backup.prune_backups(
+        if not local["prune"]:
+            logging.warning("backup pruning not configured")
+            return False
+        backup.cleanup_backups(
             local["directory"],
-            local["prune"]["keep_archives"],
-            local["prune"]["keep_days"],
+            local["prune"],
             local["archive_prefix"],
         )
         return True
 
     if args.skip_if_recent:
-        md = backup.Metadata(
-            pathlib.Path(local["directory"]).expanduser().resolve(strict=False)
-        )
+        md = backup.Metadata(local["directory"])
         # Add a few hours to the "recent" limit, so that periodic runs exactly
         # 24h after previous run arent't skipped, which would cause the period
         # runs to drift.
@@ -129,15 +127,14 @@ def _main():
     try:
         result = backup.make_backup(
             local["directory"],
-            local["gpg_key_id"],
-            local["prune"]["keep_archives"],
-            local["prune"]["keep_days"],
+            local["gpg_public_key"],
+            local["prune"],
             local["archive_prefix"],
-            local.get("compression", "gzip"),
+            local["compression"],
             config["backup_sources"],
-            config.get("pre_hooks", []),
+            config["pre_hooks"],
             timeout,
-            tar_ignore_file,
+            local["ignore_file"],
         )
     except Exception:
         logging.debug("", exc_info=True)
@@ -167,6 +164,59 @@ def _main():
         hooks.call_hooks(config.get("post_hooks", []))
         logging.debug("removing %s", tmpdir)
         shutil.rmtree(tmpdir.as_posix())
+
+
+def get_config(config_file: pathlib.Path) -> dict:
+    """Read config. Resolve relative-to-config-file paths to absolute paths."""
+    config: dict = yaml.safe_load(config_file.read_bytes())
+    try:
+        _process_config(config, config_file.parent)
+    except (KeyError, TypeError) as exc:
+        raise BackupException("Config error: %s (%s)", exc, config_file, retcode=2)
+    config["backup_sources"].append({"path": str(config_file), "skip_dirs": False})
+    return config
+
+
+def _process_config(conf: dict, config_file_dir):
+    # Make all source 'path' be absolute and add defaults for 'skip_dirs'.
+    for source in conf["backup_sources"]:
+        path = os.path.expanduser(source["path"])
+        if not os.path.isabs(path):
+            path = (config_file_dir / source["path"]).resolve().as_posix()
+        source["path"] = path
+        source.setdefault("skip_dirs", False)
+
+    # Resolve paths to hooks. Set them to empty empty list if not defined.
+    for hook_type in {"pre_hooks", "post_hooks"}:
+        if conf.get(hook_type) is None:
+            conf[hook_type] = []
+        for i, path in enumerate(conf[hook_type]):
+            if not os.path.isabs(path):
+                conf[hook_type][i] = (config_file_dir / path).resolve().as_posix()
+
+    local = conf["local_backup"]
+
+    path = os.path.expanduser(local["directory"])
+    if not os.path.isabs(path):
+        path = (config_file_dir / path).resolve().as_posix()
+    local["directory"] = path
+
+    # Set gpg_public_key to (key: str, is_file: bool)
+    gpg_public_key = local["gpg_public_key"]
+    keyfile = os.path.expanduser(gpg_public_key)
+    if os.path.exists(keyfile):
+        if not os.path.isabs(keyfile):
+            keyfile = (config_file_dir / keyfile).resolve().as_posix()
+        local["gpg_public_key"] = (keyfile, True)
+    else:
+        local["gpg_public_key"] = (gpg_public_key, False)
+
+    local.setdefault("ignore_file", ".cebackup")
+    local.setdefault("compression", "gzip"),
+
+    if "prune" in local:
+        assert local["prune"]["keep_archives"]
+        assert local["prune"]["keep_days"]
 
 
 def main():

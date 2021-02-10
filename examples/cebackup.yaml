@@ -5,6 +5,7 @@
 
 # List of files/directories/glob patterns to include in the backup archive.
 # A glob pattern can include ** for recursive globbing, unless 'skip_dirs: yes'.
+# Relative paths are relative to this config file.
 backup_sources:
   #- path: ~/Documents/*.*
   #  skip_dirs: yes
@@ -13,6 +14,7 @@ backup_sources:
 
 # pre_hooks are executables that produce a list of paths on stdout to include
 # in the backup archive.
+# Relative paths are relative to this config file.
 # If a directory is specified, all executables in the directory are used.
 # Variables in hooks running environment:
 #   CEBACKUP=1
@@ -39,24 +41,27 @@ local_backup:
 
   # The oldest backup archives are deleted, if there are more than
   # 'keep_archives' and older than 'keep_days'.
+  # Without 'prune' directive, backup files aren't removed.
   prune:
     keep_archives: 5
     keep_days: 14
 
-  # gpg_key_id identifier of key in keyring to use for encryption.
-  gpg_key_id: key-id/fingerprint/e-mail
+  # gpg_public_key: identifier of key in keyring OR path to a file with the
+  # public key to encrypt backup archives for.
+  gpg_public_key: key-id/fingerprint/e-mail/path
 
   archive_prefix: backup
 
   # The command including any arguments used to compress the tar archive.
-  #compression: gzip
+  #compression: gzip -6
 
   # Passed to tar '--exclude-ignore-recursive=' option
-  ignore_file: .cebackup
+  #ignore_file: .cebackup
 
   # timeout for creating tar archive.
   #timeout: 120
 
 # By default, logs are written to stdout and log level is warning.
+# Can also be controled with CLI options.
 #log_file: ~/.backup.log
 #log_level: info
