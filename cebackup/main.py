@@ -175,5 +175,5 @@ def main():
             sys.exit(0)
         sys.exit(1)
     except BackupException as exc:
-        logging.error(exc._message, exc._args)
+        logging.error(exc._message, *exc._args)
         sys.exit(exc.retcode)
