@@ -38,15 +38,20 @@ def test_make_source_list(homedir):
 @pytest.mark.subprocess
 def test_backuparchive_make_archive(tmp_path: pathlib.Path, faketime):
     archive = bk.BackupArchive(tmp_path, "foo", "gzip")
-    assert str(archive) == "%s/%s_%s_20210101T000000.tar" % (tmp_path, "foo", faketime)
+    assert str(archive.tar_file) == "%s/%s_%s_20210101T000000.tar" % (
+        tmp_path,
+        "foo",
+        faketime,
+    )
     for f in {"alpha.txt", "bravo.txt"}:
         (tmp_path / f).write_text("back this up")
         archive.add((tmp_path / f).as_posix())
+    assert len(archive.make_checksum()) == 64
     archive.compress(timeout=5)
     assert archive.compressed_file.exists()
-    assert len(archive.make_checksum()) == 64
     archive.unlink()
     assert not archive.compressed_file.exists()
+    assert not archive.tar_file.exists()
 
 
 def test_checksums_empty_file(tmp_path, faketime):
@@ -59,7 +64,7 @@ def test_checksums_empty_file(tmp_path, faketime):
     chk.add("deadbeef", bk.BackupArchive(tmp_path, "test", "bzip2", 60))
     assert len(chk._archives) == 1
     chk.write()
-    with open(tmp_path / bk.Metadata.CHECKSUM_FILE) as fp:
+    with open(tmp_path / bk.Metadata.METADATA_FILE) as fp:
         data = json.load(fp)
     assert data == [
         {
@@ -82,7 +87,7 @@ def test_checksums_load_file(tmp_path):
             "touched": 45678,
         }
     ]
-    with open(tmp_path / bk.Metadata.CHECKSUM_FILE, "w") as fp:
+    with open(tmp_path / bk.Metadata.METADATA_FILE, "w") as fp:
         json.dump(data, fp)
     chk = bk.Metadata(tmp_path)
     assert len(chk._archives) == 1

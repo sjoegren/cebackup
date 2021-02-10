@@ -33,37 +33,39 @@ class BackupArchive:
             self.time,
             time.strftime("%Y%m%dT%H%M%S", time.localtime(self.time)),
         )
+        self.tar_file = self.backup_dir / self.archivename
         self.compressed_file = None
         self.tar_flags = [
             "--exclude-vcs",
             "--exclude-vcs-ignores",
             "--verbose",
             "--file",
-            str(self),
+            self.tar_file.as_posix(),
         ]
         self._added_paths = set()
         self.failed = set()
-
-    def __str__(self):
-        return str(self.backup_dir / self.archivename)
 
     @property
     def path_encrypted(self):
         return self.backup_dir / (self.compressed_file.name + ".gpg")
 
     def unlink(self):
-        self.compressed_file.unlink()
+        if self.tar_file:
+            self.tar_file.unlink(missing_ok=True)
+        if self.compressed_file:
+            self.compressed_file.unlink(missing_ok=True)
 
     def make_checksum(self):
-        assert self.compressed_file.exists()
+        """Calculate and return sha256 checksum of the uncompressed tar archive."""
+        assert self.tar_file.exists()
         checksum = hashlib.sha256()
         bufsize = 32 * 1024 ** 2
-        with self.compressed_file.open("rb") as tarfile:
+        with self.tar_file.open("rb") as tarfile:
             data = tarfile.read(bufsize)
             while data:
                 checksum.update(data)
                 data = tarfile.read(bufsize)
-        log.info("Archive sha256 checksum: %s", checksum.hexdigest())
+        log.debug("%s sha256 checksum: %s", self.archivename, checksum.hexdigest())
         return checksum.hexdigest()
 
     def add(self, path: str):
@@ -91,8 +93,8 @@ class BackupArchive:
             self._added_paths.add(path)
 
     def compress(self, timeout):
-        cmd = self.compress_args + [str(self)]
-        log.info("Compressing archive: %s", shlex.join(cmd))
+        cmd = self.compress_args + [str(self.tar_file)]
+        log.debug("Compressing archive: %s", shlex.join(cmd))
         try:
             subprocess.run(
                 cmd,
@@ -113,11 +115,11 @@ class BackupArchive:
 
 
 class Metadata:
-    CHECKSUM_FILE = "metadata.json"
+    METADATA_FILE = "metadata.json"
 
-    def __init__(self, backup_dir: pathlib.Path):
-        self._backup_dir = backup_dir
-        self._file = backup_dir / self.CHECKSUM_FILE
+    def __init__(self, backup_dir: Union[pathlib.Path, str]):
+        self._backup_dir = pathlib.Path(backup_dir)
+        self._file = self._backup_dir / self.METADATA_FILE
         self._archives = []
         self._checksums = {}
         if self._file.exists():
@@ -134,7 +136,7 @@ class Metadata:
         self._set_checksums()
         with self._file.open("w") as file_:
             json.dump(self._archives, file_, indent=4)
-        log.info("Wrote %d checksums to %s", len(self._archives), self._file)
+        log.debug("Wrote %d checksums to %s", len(self._archives), self._file)
 
     def get_archive(self, chk) -> Optional[Dict[str, Any]]:
         """Return archive dict or None if chk doesn't exist."""
@@ -200,7 +202,7 @@ def make_backup(
     )
     backup_dir = pathlib.Path(destdir).expanduser().resolve(strict=False)
     backup_dir.mkdir(exist_ok=True)
-    checksums = Metadata(backup_dir)
+    metadata = Metadata(backup_dir)
 
     paths = make_source_list(sources)
     failure = False
@@ -214,7 +216,7 @@ def make_backup(
     log.debug("Paths to include in archive:\n%s", "\n  ".join(paths))
 
     archive = BackupArchive(backup_dir, prefix, compression)
-    log.info("Create archive %s", archive.archivename)
+    log.debug("Create archive %s", archive.archivename)
     archive.tar_flags.append("--exclude-ignore-recursive=" + tar_ignore_file)
     timeout_ = time.monotonic() + timeout
     # Append paths to tar archive one by one so that timeout can be checked
@@ -226,31 +228,31 @@ def make_backup(
             archive.failed.add(path)
             break
         archive.add(path)
-    archive.compress(timeout)
-
     checksum = archive.make_checksum()
-    if (existing := checksums.get_archive(checksum)) :
+
+    if (existing := metadata.get_archive(checksum)) :
         log.info(
-            "An archive with the same checksum already exist: %s, skipping.",
-            backup_dir / existing["archive"],
+            "A backup with the same checksum already exist: %s, skipping.",
+            backup_dir / existing["encrypted"],
         )
         if (backup_dir / existing["encrypted"]).exists():
             (backup_dir / existing["encrypted"]).touch()
             archive.unlink()
-            checksums.add(checksum, archive)
-            checksums.write()
+            metadata.add(checksum, archive)
+            metadata.write()
             return Result(not failure)
         else:
             log.warning(
                 "Expected %s to exist, but it doesn't. Remove from checksum file.",
                 existing["encrypted"],
             )
-            checksums.remove(checksum)
+            metadata.remove(checksum)
 
-    checksums.add(checksum, archive)
-    checksums.write()
+    archive.compress(timeout)
+    metadata.add(checksum, archive)
+    metadata.write()
 
-    log.info("Encrypt archive %s", archive.compressed_file)
+    log.debug("Encrypt archive %s", archive.compressed_file)
     pubkey_spec, pubkey_is_file = gpg_public_key
     cmdargs = [
         "gpg",
@@ -269,14 +271,15 @@ def make_backup(
     p.check_returncode()
 
     archive.unlink()
+    log.info("Created backup %s", archive.path_encrypted)
 
     if archive.failed:
         log.error("Failed to archive some paths: %s", archive.failed)
-        return Result(False, True, checksums.get_archive(checksum), paths)
+        return Result(False, True, metadata.get_archive(checksum), paths)
 
     if prune_backups:
         cleanup_backups(destdir, prune_backups, prefix)
-    return Result(not failure, True, checksums.get_archive(checksum), paths)
+    return Result(not failure, True, metadata.get_archive(checksum), paths)
 
 
 def cleanup_backups(destdir, prune_backups, prefix):
@@ -288,7 +291,7 @@ def cleanup_backups(destdir, prune_backups, prefix):
     if not backup_dir.is_dir():
         log.warning("No such directory: %s", backup_dir)
         return None
-    checksums = Metadata(backup_dir)
+    metadata = Metadata(backup_dir)
     keep_monthly = {}
     backups = [
         f
@@ -297,13 +300,13 @@ def cleanup_backups(destdir, prune_backups, prefix):
     ]
     backups.sort(key=lambda f: f.name, reverse=True)
     age_limit = time.time() - prune_backups["keep_days"] * 86400
-    log.info("Delete backup archives older than %s", time.ctime(age_limit))
+    log.debug("Delete backup archives older than %s", time.ctime(age_limit))
 
     # Iterate over backup archive files, from latest and descending.
     for bk in backups[prune_backups["keep_archives"] :]:
         log.debug("consider for deletion: %s", bk.name)
         month = get_month_from_backup_file(bk)
-        meta = checksums.get_from_encrypted_name(bk)
+        meta = metadata.get_from_encrypted_name(bk)
         if month not in keep_monthly:
             log.debug("Keep latest backup from month %s: %s", month, bk)
             keep_monthly[month] = bk
@@ -312,12 +315,12 @@ def cleanup_backups(destdir, prune_backups, prefix):
         elif meta["touched"] < age_limit:
             log.info("Removing %s, timestamp: %s", bk.name, time.ctime(meta["touched"]))
             bk.unlink()
-            checksums.remove(meta["open-checksum"])
+            metadata.remove(meta["open-checksum"])
         else:
             log.debug(
                 "not deleting %s, last touched %s", bk.name, time.ctime(meta["touched"])
             )
-    checksums.write()
+    metadata.write()
 
 
 def make_source_list(sources: Iterable[dict]) -> List[str]:

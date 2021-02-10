@@ -191,6 +191,7 @@ def _process_config(conf: dict, config_file_dir):
         if conf.get(hook_type) is None:
             conf[hook_type] = []
         for i, path in enumerate(conf[hook_type]):
+            path = os.path.expanduser(path)
             if not os.path.isabs(path):
                 conf[hook_type][i] = (config_file_dir / path).resolve().as_posix()
 
@@ -217,6 +218,8 @@ def _process_config(conf: dict, config_file_dir):
     if "prune" in local:
         assert local["prune"]["keep_archives"]
         assert local["prune"]["keep_days"]
+    else:
+        local["prune"] = None
 
 
 def main():
