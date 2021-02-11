@@ -110,10 +110,8 @@ def _main():
 
     start = datetime.datetime.now()
     os.environ["CEBACKUP"] = "1"
-    tmpdir = pathlib.Path(
-        pathlib.Path.home() / "cebackup-tmpdir-{:%Y%m%d%H%M%S}".format(start),
-    )
-    tmpdir.mkdir(0o755)
+    tmpdir = pathlib.Path(config["hook_tmpdir"])
+    tmpdir.mkdir(0o700)
     os.environ["CEBACKUP_TMPDIR"] = str(tmpdir)
 
     post_hooks_env = {
@@ -153,6 +151,7 @@ def _main():
                 local["directory"], result.meta["encrypted"]
             )
         if result.paths:
+            # Write all used backup sources to file if post_hooks wants to know.
             src_file = tmpdir / "backup_sources"
             with src_file.open("w") as fp:
                 for path in result.paths:
@@ -194,6 +193,11 @@ def _process_config(conf: dict, config_file_dir):
             path = os.path.expanduser(path)
             if not os.path.isabs(path):
                 conf[hook_type][i] = (config_file_dir / path).resolve().as_posix()
+
+    path = os.path.expanduser(conf.setdefault("hook_tmpdir", "~/cebackup-auxdata"))
+    if not os.path.isabs(path):
+        path = (config_file_dir / path).resolve().as_posix()
+    conf["hook_tmpdir"] = path
 
     local = conf["local_backup"]
 

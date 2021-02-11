@@ -3,6 +3,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import textwrap
 import time
 
 import pytest
@@ -41,6 +42,23 @@ def config_file(tmp_path: pathlib.Path, testdata):
     conf["local_backup"]["directory"] = "backup_dir"  # relative to config
     conf["local_backup"]["gpg_public_key"] = str(TESTDATA_DIR / "gpg.pub")
     conf["log_level"] = "debug"
+
+    # Make a hook script that creates a file with the exact same data and mtime each run
+    pre_hook = tmp_path / "testhook.sh"
+    pre_hook.write_text(
+        textwrap.dedent(
+            """\
+        #!/bin/sh
+        set -eu
+        LC_ALL=C TZ=UTC date -d '06:00' > "$CEBACKUP_TMPDIR/aux.data"
+        TZ=UTC touch -d '06:00' "$CEBACKUP_TMPDIR/aux.data"
+        echo "$CEBACKUP_TMPDIR/aux.data"
+        """
+        )
+    )
+    pre_hook.chmod(0o755)
+    conf["pre_hooks"] = ["testhook.sh"]
+
     file_ = tmp_path / "config.yaml"
     with file_.open("w") as fp:
         yaml.dump(conf, fp)
@@ -79,7 +97,7 @@ def test_make_backup_simple(config_file: pathlib.Path):
 
 def test_make_backups_duplicate_archive_checksum(tmp_path, config_file: pathlib.Path):
     """Verify that no new archive was stored since metadata matched existing archive."""
-    logfile = tmp_path / "backup.log"
+    logfile: pathlib.Path = tmp_path / "backup.log"
     p = subprocess.run(["cebackup", "-c", str(config_file), "--log-file", logfile])
     assert p.returncode == 0
 
@@ -89,7 +107,7 @@ def test_make_backups_duplicate_archive_checksum(tmp_path, config_file: pathlib.
     backup_file = pathlib.Path(m[1])
     assert backup_file.exists()
     assert not re.search(r"\b(?:WARNING|ERROR|CRITICAL)\b", log)
-    logfile.unlink()
+    logfile.rename(f"{logfile}.run1")
 
     time.sleep(1)  # Give timestamp for filename time to change
     p = subprocess.run(["cebackup", "-c", str(config_file), "--log-file", logfile])

@@ -23,6 +23,10 @@ backup_sources:
 #pre_hooks:
 #  - <repo-path>/examples/hooks/
 
+# Directory where pre_hooks can optionally put generated files to backup. It's
+# removed after each run.
+#hook_tmpdir: ~/cebackup-auxdata
+
 # post_hooks are executed after a cebackup execution.
 # Variables in hooks running environment:
 #   CEBACKUP=1
