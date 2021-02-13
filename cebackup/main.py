@@ -9,10 +9,9 @@ import shutil
 import sys
 import time
 
-import yaml
-
-from . import BackupException, DEFAULT_CONFIG_FILE
+from . import BackupException
 from . import backup
+from . import config
 from . import hooks
 
 
@@ -29,7 +28,7 @@ def _main():
     parser.add_argument(
         "-c",
         "--config",
-        default=DEFAULT_CONFIG_FILE,
+        default=config.DEFAULT_CONFIG_FILE,
         help="Specify the YAML config file (default: %(default)s).",
     )
     parser.add_argument(
@@ -65,12 +64,13 @@ def _main():
     )
     args = parser.parse_args()
 
-    config_file = pathlib.Path(args.config).expanduser().resolve(strict=True)
-    config = get_config(config_file)
-    local = config["local_backup"]
+    conf = config.get_config(
+        pathlib.Path(args.config).expanduser().resolve(strict=True)
+    )
+    local = conf["local_backup"]
 
-    log_file = args.log_file or config.get("log_file")
-    log_level = args.log_level or config.get("log_level", "warning").upper()
+    log_file = args.log_file or conf.get("log_file")
+    log_level = args.log_level or conf.get("log_level", "warning").upper()
     timeout = args.timeout or local.get("timeout", 120)
 
     logging_kwargs = {}
@@ -110,7 +110,7 @@ def _main():
 
     start = datetime.datetime.now()
     os.environ["CEBACKUP"] = "1"
-    tmpdir = pathlib.Path(config["hook_tmpdir"])
+    tmpdir = pathlib.Path(conf["hook_tmpdir"])
     tmpdir.mkdir(0o700)
     os.environ["CEBACKUP_TMPDIR"] = str(tmpdir)
 
@@ -129,8 +129,8 @@ def _main():
             local["prune"],
             local["archive_prefix"],
             local["compression"],
-            config["backup_sources"],
-            config["pre_hooks"],
+            conf["backup_sources"],
+            conf["pre_hooks"],
             timeout,
             local["ignore_file"],
         )
@@ -160,70 +160,9 @@ def _main():
         return result.ok
     finally:
         os.environ.update(post_hooks_env)
-        hooks.call_hooks(config.get("post_hooks", []))
+        hooks.call_hooks(conf.get("post_hooks", []))
         logging.debug("removing %s", tmpdir)
         shutil.rmtree(tmpdir.as_posix())
-
-
-def get_config(config_file: pathlib.Path) -> dict:
-    """Read config. Resolve relative-to-config-file paths to absolute paths."""
-    config: dict = yaml.safe_load(config_file.read_bytes())
-    try:
-        _process_config(config, config_file.parent)
-    except (KeyError, TypeError) as exc:
-        raise BackupException("Config error: %s (%s)", exc, config_file, retcode=2)
-    config["backup_sources"].append({"path": str(config_file), "skip_dirs": False})
-    return config
-
-
-def _process_config(conf: dict, config_file_dir):
-    # Make all source 'path' be absolute and add defaults for 'skip_dirs'.
-    for source in conf["backup_sources"]:
-        path = os.path.expanduser(source["path"])
-        if not os.path.isabs(path):
-            path = (config_file_dir / source["path"]).resolve().as_posix()
-        source["path"] = path
-        source.setdefault("skip_dirs", False)
-
-    # Resolve paths to hooks. Set them to empty empty list if not defined.
-    for hook_type in {"pre_hooks", "post_hooks"}:
-        if conf.get(hook_type) is None:
-            conf[hook_type] = []
-        for i, path in enumerate(conf[hook_type]):
-            path = os.path.expanduser(path)
-            if not os.path.isabs(path):
-                conf[hook_type][i] = (config_file_dir / path).resolve().as_posix()
-
-    path = os.path.expanduser(conf.setdefault("hook_tmpdir", "~/cebackup-auxdata"))
-    if not os.path.isabs(path):
-        path = (config_file_dir / path).resolve().as_posix()
-    conf["hook_tmpdir"] = path
-
-    local = conf["local_backup"]
-
-    path = os.path.expanduser(local["directory"])
-    if not os.path.isabs(path):
-        path = (config_file_dir / path).resolve().as_posix()
-    local["directory"] = path
-
-    # Set gpg_public_key to (key: str, is_file: bool)
-    gpg_public_key = local["gpg_public_key"]
-    keyfile = os.path.expanduser(gpg_public_key)
-    if os.path.exists(keyfile):
-        if not os.path.isabs(keyfile):
-            keyfile = (config_file_dir / keyfile).resolve().as_posix()
-        local["gpg_public_key"] = (keyfile, True)
-    else:
-        local["gpg_public_key"] = (gpg_public_key, False)
-
-    local.setdefault("ignore_file", ".cebackup")
-    local.setdefault("compression", "gzip"),
-
-    if "prune" in local:
-        assert local["prune"]["keep_archives"]
-        assert local["prune"]["keep_days"]
-    else:
-        local["prune"] = None
 
 
 def main():

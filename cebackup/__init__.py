@@ -1,6 +1,3 @@
-DEFAULT_CONFIG_FILE = "~/.config/cebackup.yaml"
-
-
 class BackupException(Exception):
     """Backup exception type.
 
