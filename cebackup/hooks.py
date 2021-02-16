@@ -15,6 +15,7 @@ Hook scripts should exit with exit code 0 if there are no errors. Other exit
 codes will cause cebackup to log an error and include stderr output from the
 hook.
 """
+import enum
 import logging as log
 import os
 import os.path
@@ -25,18 +26,25 @@ from collections import abc
 from typing import Iterable, Optional
 
 
-def call_hooks(hooks: Optional[Iterable[str]]) -> tuple[bool, list[str]]:
+class HookType(enum.Enum):
+    pre = 1
+    post = 2
+
+
+def call_hooks(
+    hooks: Optional[Iterable[str]],
+    hook_type: HookType,
+) -> tuple[bool, list[str]]:
     """Call all executables in hooks and return a list of lines written to
     stdout.
 
-    pre_hooks uses the stdout API to print paths that should be included in the
-    backup.
+    pre_hooks uses stdout to print paths that should be included in the backup.
     """
     if not hooks:
         return True, []
     paths = set()
     all_ok = True
-    for hook in resolve_hooks(hooks):
+    for hook in resolve_hooks(hooks, hook_type):
         log.info("Run hook %s", hook)
         if (ret := run_hook(hook)) is not None:
             log.debug("got paths: %s", ret)
@@ -47,14 +55,21 @@ def call_hooks(hooks: Optional[Iterable[str]]) -> tuple[bool, list[str]]:
     return all_ok, list(paths)
 
 
-def resolve_hooks(hooks_list: Iterable[str]) -> abc.Generator[pathlib.Path, None, None]:
-    for hook in hooks_list:
+def resolve_hooks(
+    hooks: Iterable[str],
+    hook_type: HookType,
+) -> abc.Generator[pathlib.Path, None, None]:
+    for hook in hooks:
         path = pathlib.Path(hook).expanduser().resolve(strict=False)
         if path.is_file() and os.access(path, os.R_OK | os.X_OK):
             yield path
         elif path.is_dir():
             for f in path.iterdir():
-                if f.is_file() and os.access(f, os.R_OK | os.X_OK):
+                if (
+                    f.is_file()
+                    and f.name.startswith("%s_" % hook_type.name)
+                    and os.access(f, os.R_OK | os.X_OK)
+                ):
                     yield f
         else:
             log.warning("Not usable hook: %s", hook)

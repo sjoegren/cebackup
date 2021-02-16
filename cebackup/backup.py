@@ -207,7 +207,7 @@ def make_backup(
     paths = make_source_list(sources)
     failure = False
     if pre_hooks:
-        success, extra_paths = hooks.call_hooks(pre_hooks)
+        success, extra_paths = hooks.call_hooks(pre_hooks, hooks.HookType.pre)
         log.debug("Got %d paths from hooks", len(extra_paths))
         paths += extra_paths
         if not success:

@@ -160,7 +160,7 @@ def _main():
         return result.ok
     finally:
         os.environ.update(post_hooks_env)
-        hooks.call_hooks(conf.get("post_hooks", []))
+        hooks.call_hooks(conf.get("post_hooks", []), hooks.HookType.post)
         logging.debug("removing %s", tmpdir)
         shutil.rmtree(tmpdir.as_posix())
 
