@@ -47,6 +47,12 @@ def _main():
         help="Override log_file from config.",
     )
     parser.add_argument(
+        "--no-log-timestamp",
+        action="store_false",
+        dest="log_timestamp",
+        help="Don't include timestamp in log format (use with systemd).",
+    )
+    parser.add_argument(
         "--skip-if-recent",
         metavar="days",
         nargs="?",
@@ -73,19 +79,22 @@ def _main():
     log_level = args.log_level or conf.get("log_level", "warning").upper()
     timeout = args.timeout or local.get("timeout", 120)
 
+    if not (log_format := conf.get("log_format")):
+        fmt_timestamp = "%(asctime)s " if args.log_timestamp else ""
+        if log_level == "DEBUG":
+            log_format = (
+                f"{fmt_timestamp}%(levelname)-8s %(pathname)s:%(lineno)s "
+                "[%(funcName)s]: %(message)s"
+            )
+        else:
+            log_format = f"{fmt_timestamp}%(levelname)-8s %(message)s"
+
     logging_kwargs = {}
     if log_file and not args.log_stdout:
         logging_kwargs["filename"] = os.path.expanduser(log_file)
     else:
         logging_kwargs["stream"] = sys.stdout
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s %(levelname)-8s %(pathname)s:%(lineno)s [%(funcName)s]: "
-        "%(message)s"
-        if log_level == "DEBUG"
-        else "%(asctime)s %(levelname)-8s %(message)s",
-        **logging_kwargs,
-    )
+    logging.basicConfig(level=log_level, format=log_format, **logging_kwargs)
 
     if args.prune_backup_dir:
         if not local["prune"]:
