@@ -1,0 +1,9 @@
+[Unit]
+Description=Configurable encrypted backup
+JobTimeoutSec=300
+ConditionACPower=true
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=%h/.local/bin/cebackup --config %E/cebackup.yaml --no-log-timestamp --skip-if-recent 1

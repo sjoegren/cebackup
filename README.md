@@ -1,4 +1,4 @@
-# Configurable encrypted backup tool
+# Configurable Encrypted Backup tool
 
 ![tests status](https://github.com/akselsjogren/cebackup/workflows/tests/badge.svg)
 
