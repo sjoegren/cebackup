@@ -17,6 +17,7 @@ import enum
 import logging
 import os
 import pathlib
+import socket
 
 import requests
 
@@ -69,8 +70,8 @@ def main():
     path = os.environ["CEBACKUP_BACKUP_PATH"]
     output = "{}".format(status.name)
     if status == OP5Status.OK:
-        output += " - Created {} | archive_size_bytes={}".format(
-            path, os.stat(path).st_size
+        output += " - Created {} on {} | archive_size={:.2f}MB".format(
+            path, socket.getfqdn(), (os.stat(path).st_size / 1_000_000)
         )
 
     r = requests.post(
