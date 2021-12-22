@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.9]
+        python-version: ['3.9', '3.10']
 
     steps:
     - uses: actions/checkout@v2
@@ -29,7 +29,7 @@ jobs:
         python -m pip install tox
     - name: Lint and unit tests
       run: |
-        tox
+        tox -e py
     - name: Integration tests
       run: |
-        tox -e py39-integration
+        tox -e py-integration
