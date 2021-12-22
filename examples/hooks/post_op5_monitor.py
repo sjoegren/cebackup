@@ -18,6 +18,7 @@ import logging
 import os
 import pathlib
 import socket
+import sys
 
 import requests
 
@@ -88,6 +89,8 @@ def main():
     logging.debug("Response: %s %s", r.status_code, r.json())
     if r.status_code != requests.codes.OK:
         logging.error("HTTP %s: %s", r.status_code, r.json())
+        sys.exit(1)
 
 
-main()
+if __name__ == "__main__":
+    main()
