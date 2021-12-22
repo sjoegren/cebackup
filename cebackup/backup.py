@@ -166,7 +166,7 @@ class Metadata:
         self._archives.remove(arch)
 
     def add(self, chk, archive):
-        if (arch := self._checksums.get(chk)) :
+        if arch := self._checksums.get(chk):
             arch["touched"] = time.time()
             log.debug("Update touched timestamp for %s", arch)
             return
@@ -230,7 +230,7 @@ def make_backup(
         archive.add(path)
     checksum = archive.make_checksum()
 
-    if (existing := metadata.get_archive(checksum)) :
+    if existing := metadata.get_archive(checksum):
         log.info(
             "A backup with the same checksum already exist: %s, skipping.",
             backup_dir / existing["encrypted"],
@@ -342,7 +342,7 @@ def make_source_list(sources: Iterable[dict]) -> List[str]:
 
 def get_month_from_backup_file(path: Union[pathlib.Path, str]) -> str:
     filename = pathlib.Path(path).name
-    if (m := re.match(r"[\w-]*?_(\d{10})_\w+\.tar[a-z0-9\.]*$", filename)) :
+    if m := re.match(r"[\w-]*?_(\d{10})_\w+\.tar[a-z0-9\.]*$", filename):
         t = time.gmtime(int(m[1]))
         return "{}-{}".format(t.tm_year, t.tm_mon)
     raise BackupException("Invalid archive name: %s", path)
