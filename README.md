@@ -1,6 +1,6 @@
 # Configurable Encrypted Backup tool
 
-![tests status](https://github.com/akselsjogren/cebackup/workflows/tests/badge.svg)
+![tests status](https://github.com/sjoegren/cebackup/workflows/tests/badge.svg)
 
 Requirements:
 
@@ -10,7 +10,7 @@ Requirements:
 Install:
 
 ```
-pipx install git+https://github.com/akselsjogren/cebackup.git
+pipx install git+https://github.com/sjoegren/cebackup.git
 cebackup --help
 ```
 
